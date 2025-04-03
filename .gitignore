@@ -4,4 +4,5 @@ node_modules/
 uploads/*
 !uploads/.gitkeep
 ssl/*
-!ssl/.gitkeep 
+!ssl/.gitkeep
+*.pcm
