@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>语音识别系统</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .container {
+            margin-top: 50px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            width: 80%;
+            max-width: 300px;
+            touch-action: manipulation;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        #result {
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            min-height: 100px;
+            word-break: break-all;
+        }
+
+        .status {
+            margin: 10px 0;
+            color: #666;
+        }
+
+        .error {
+            color: red;
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid red;
+            border-radius: 4px;
+            display: none;
+        }
+    </style>
+    <!-- 引入 Recorder.js 核心库和WAV编码器 -->
+    <script src="recorder-core.js"></script>
+    <script src="wav.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <h1>语音识别系统</h1>
+        <div class="status" id="status">准备就绪</div>
+        <div class="error" id="error"></div>
+        <button id="recordButton">开始录音</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        let recorder;
+        let isRecording = false;
+        const recordButton = document.getElementById('recordButton');
+        const statusElement = document.getElementById('status');
+        const resultElement = document.getElementById('result');
+        const errorElement = document.getElementById('error');
+
+        // 显示错误信息
+        function showError(message) {
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+            statusElement.textContent = '错误';
+        }
+
+        // 隐藏错误信息
+        function hideError() {
+            errorElement.style.display = 'none';
+        }
+
+        // 初始化录音器
+        function initRecorder() {
+            recorder = Recorder({
+                type: "wav",
+                sampleRate: 16000,
+                bitRate: 16,
+                onProcess: function (buffer, power, bufferDuration, bufferSampleRate) {
+                    // 可以在这里添加实时音量显示等功能
+                }
+            });
+
+            // 打开麦克风
+            recorder.open(function () {
+                statusElement.textContent = '录音器已就绪';
+                recordButton.disabled = false;
+            }, function (msg, isUserNotAllow) {
+                showError(isUserNotAllow ? '请允许浏览器访问麦克风' : '录音器初始化失败: ' + msg);
+                recordButton.disabled = true;
+            });
+        }
+
+        // 开始录音
+        function startRecording() {
+            hideError();
+            recorder.start();
+            statusElement.textContent = '正在录音...';
+        }
+
+        // 停止录音
+        function stopRecording() {
+            recorder.stop(function (blob, duration) {
+                statusElement.textContent = '正在处理音频...';
+                // 将音频数据转换为PCM
+                convertToPCM(blob);
+            }, function (msg) {
+                showError('录音失败: ' + msg);
+                recordButton.disabled = false;
+            });
+        }
+
+        // 将音频转换为PCM
+        async function convertToPCM(blob) {
+            try {
+                const arrayBuffer = await blob.arrayBuffer();
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+                // 重采样为 16kHz
+                const offlineContext = new OfflineAudioContext({
+                    numberOfChannels: 1,
+                    length: audioBuffer.duration * 16000,
+                    sampleRate: 16000
+                });
+
+                const source = offlineContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(offlineContext.destination);
+                source.start();
+
+                const renderedBuffer = await offlineContext.startRendering();
+                const pcmData = new Float32Array(renderedBuffer.length);
+                renderedBuffer.copyFromChannel(pcmData, 0);
+
+                // 转换为 16bit PCM
+                const pcm16bit = new Int16Array(pcmData.length);
+                for (let i = 0; i < pcmData.length; i++) {
+                    pcm16bit[i] = pcmData[i] * 0x7FFF;
+                }
+
+                await sendAudioToServer(pcm16bit.buffer);
+            } catch (err) {
+                console.error('音频处理失败:', err);
+                showError('音频处理失败: ' + err.message);
+            }
+        }
+
+        // 发送音频数据到服务器
+        async function sendAudioToServer(pcmBuffer) {
+            try {
+                statusElement.textContent = '正在发送到服务器...';
+                const formData = new FormData();
+                formData.append('audio', new Blob([pcmBuffer], { type: 'audio/pcm' }));
+
+                // 使用当前页面的协议（http或https）
+                const protocol = window.location.protocol;
+                const host = window.location.host;
+                const response = await fetch(`${protocol}//${host}/recognize-tencent`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('服务器响应错误');
+                }
+
+                const result = await response.json();
+                resultElement.textContent = result.text;
+                statusElement.textContent = '识别完成';
+                recordButton.disabled = false;
+            } catch (error) {
+                console.error('发送失败:', error);
+                showError('发送失败: ' + error.message);
+                recordButton.disabled = false;
+            }
+        }
+
+        // 按钮点击事件处理
+        recordButton.onclick = async () => {
+            if (!isRecording) {
+                startRecording();
+                recordButton.textContent = '停止录音';
+            } else {
+                recordButton.disabled = true;
+                stopRecording();
+                recordButton.textContent = '开始录音';
+            }
+            isRecording = !isRecording;
+        };
+
+        // 页面加载时初始化录音器
+        window.addEventListener('load', initRecorder);
+    </script>
+</body>
+
+</html>

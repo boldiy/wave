@@ -1,0 +1,6 @@
+node_modules/
+.env
+uploads/
+*.pcm
+.DS_Store
+ssl/ 
